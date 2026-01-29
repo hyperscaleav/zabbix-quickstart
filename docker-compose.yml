@@ -1,9 +1,18 @@
 version: "3.9"
 
+# Profiles:
+#   full  – postgres + zabbix-server + zabbix-web + zabbix-agent + zabbix-proxy
+#   edge  – zabbix-agent + zabbix-proxy only (point at external Zabbix server via ZABBIX_SERVER_ADDRESS)
+# Usage:
+#   docker compose --profile full up -d   # everything
+#   docker compose --profile edge up -d  # proxy & agent only
+
 services:
   postgres:
     image: "${POSTGRES_IMAGE}"
     restart: unless-stopped
+    profiles:
+      - full
     environment:
       POSTGRES_DB: "${POSTGRES_DB}"
       POSTGRES_USER: "${POSTGRES_USER}"
@@ -16,6 +25,8 @@ services:
   zabbix-server:
     image: "${ZABBIX_SERVER_IMAGE}"
     restart: unless-stopped
+    profiles:
+      - full
     depends_on:
       - postgres
     ports:
@@ -42,6 +53,8 @@ services:
   zabbix-web:
     image: "${ZABBIX_WEB_IMAGE}"
     restart: unless-stopped
+    profiles:
+      - full
     depends_on:
       - zabbix-server
     ports:
@@ -62,15 +75,16 @@ services:
       - backend
       - frontend
 
-  zabbix-proxy-sqlite3:
-    image: "${ZABBIX_PROXY_SQLITE3_IMAGE}"
+  zabbix-proxy:
+    image: "${ZABBIX_PROXY_IMAGE}"
     restart: unless-stopped
-    depends_on:
-      - zabbix-server
+    profiles:
+      - full
+      - edge
     environment:
-      # Tell the proxy how to reach the Zabbix server (inside Docker network)
-      ZBX_SERVER_HOST: zabbix-server
-      ZBX_SERVER_PORT: "10051"
+      # Full stack: ZABBIX_SERVER_ADDRESS unset → zabbix-server. Edge: set to central server hostname/IP
+      ZBX_SERVER_HOST: "${ZABBIX_SERVER_ADDRESS:-zabbix-server}"
+      ZBX_SERVER_PORT: "${ZABBIX_SERVER_PORT:-10051}"
       # How this proxy will appear in the Zabbix UI
       ZBX_HOSTNAME: "${ZABBIX_PROXY_HOSTNAME}"
       # Basic proxy behaviour – defaults tuned for AV use, can be changed in .env
@@ -79,6 +93,28 @@ services:
       ZBX_PROXYMEMORYBUFFERAGE: "${ZBX_PROXYMEMORYBUFFERAGE}"
       ZBX_PROXYMEMORYBUFFERSIZE: "${ZBX_PROXYMEMORYBUFFERSIZE}"
       ZBX_ENABLEREMOTECOMMANDS: "${ZBX_ENABLEREMOTECOMMANDS}"
+    networks:
+      - backend
+
+  # Full stack: monitors this host. Edge: reports to central server (ZABBIX_SERVER_ADDRESS)
+  zabbix-agent:
+    image: "${ZABBIX_AGENT_IMAGE}"
+    restart: unless-stopped
+    profiles:
+      - full
+      - edge
+    init: true
+    privileged: true
+    pid: "host"
+    ports:
+      - "${ZABBIX_AGENT_PORT}:10050"
+    environment:
+      ZBX_SERVER_HOST: "${ZABBIX_SERVER_ADDRESS:-zabbix-server}"
+      ZBX_SERVER_PORT: "${ZABBIX_SERVER_PORT:-10051}"
+      # Host name as it will appear in Zabbix UI (create a host with this name and link the agent)
+      ZBX_HOSTNAME: "${ZABBIX_AGENT_HOSTNAME}"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
     networks:
       - backend
 

@@ -5,6 +5,7 @@ This project gives you a **ready-to-run Zabbix monitoring stack** for AV systems
 - Zabbix Server (brains)
 - PostgreSQL database (stores history and configuration)
 - Zabbix Web UI (web dashboard)
+- Zabbix Agent (monitors the host running the stack – the “Zabbix server” host)
 - Zabbix Proxy (SQLite3, customized for AV monitoring)
 
 You do **not** need to write code. You only need to run a few commands.
@@ -44,9 +45,32 @@ You can think of each container as a small, pre-packaged app:
 - One container for the database.
 - One for the Zabbix server.
 - One for the web interface.
+- One for the Zabbix agent (monitors this host).
 - One for the AV-focused Zabbix proxy.
 
 All of this is controlled by the `docker-compose.yml` file in this folder.
+
+---
+
+### Running modes (profiles)
+
+You can bring up **everything** (server + web + DB + agent + proxy) or **only the proxy and agent** (for a remote site that reports to a central Zabbix server).
+
+| Mode | Profile | What runs | When to use |
+|------|---------|-----------|--------------|
+| **Full stack** | `full` | postgres, zabbix-server, zabbix-web, zabbix-agent, zabbix-proxy | This host is the Zabbix server (pilot or central). |
+| **Edge** | `edge` | zabbix-agent, zabbix-proxy only | This host is a remote site; proxy and agent report to a central server. |
+
+- **Full stack** (default):
+  ```bash
+  docker compose --profile full up -d
+  ```
+- **Proxy + agent only** (edge):
+  1. In `.env`, set `ZABBIX_SERVER_ADDRESS` to your central Zabbix server hostname or IP (and `ZABBIX_SERVER_PORT` if not 10051).
+  2. Run:
+  ```bash
+  docker compose --profile edge up -d
+  ```
 
 ---
 
@@ -84,6 +108,9 @@ Check or change:
   - Default HTTP is `80` (standard). Change only if it conflicts with something else.
 - **Timezone**: `PHP_TZ`  
   - Set it to your local timezone, for example `America/New_York`.
+- **Agent host name**: `ZABBIX_AGENT_HOSTNAME`  
+  - This is the host name you will use in the Zabbix UI for the machine running the stack.  
+    Default: `Zabbix server`.
 - **Proxy name**: `ZABBIX_PROXY_HOSTNAME`  
   - This is how the proxy will appear inside the Zabbix UI.  
     Example: `av-proxy-1`.
@@ -97,10 +124,13 @@ Save and close the file.
 From `/opt/zabbix`:
 
 ```bash
-./start.sh
+mkdir -p ./data/postgres
+docker compose --profile full up -d
 ```
 
-This script will:
+This starts the **full stack** (postgres, server, web, agent, proxy). To start only proxy and agent (edge mode), set `ZABBIX_SERVER_ADDRESS` in `.env` and run `docker compose --profile edge up -d` (see [Running modes](#running-modes-profiles)).
+
+This will:
 
 - Create `./data/postgres/` (where the database files live).
 - Download the necessary images (first time only).
@@ -108,7 +138,8 @@ This script will:
   - `postgres` (database)
   - `zabbix-server`
   - `zabbix-web`
-  - `zabbix-proxy-sqlite3`
+  - `zabbix-agent` (monitors this host)
+  - `zabbix-proxy`
 
 You can see status with:
 
@@ -131,6 +162,24 @@ Default Zabbix login:
 
 You will be prompted to go through a short setup wizard the first time.  
 Use the values from `.env` when it asks for database settings.
+
+---
+
+### 5. Add the “Zabbix server” host (so the agent is monitored)
+
+The stack includes a Zabbix agent that monitors the host running Docker. To see this host in Zabbix:
+
+1. In the Zabbix UI, go to **Data collection** → **Hosts** → **Create host**.
+2. **Host name**: use the same value as in `.env` → `ZABBIX_AGENT_HOSTNAME` (default: `Zabbix server`).
+3. **Interfaces**: add an interface:
+   - **Type**: Zabbix agent  
+   - **IP address / DNS**: `zabbix-agent` (Docker service name; the server reaches the agent over the internal network.)  
+   - **Connect to**: DNS  
+   - **Port**: `10050`
+4. Add the host to a group (e.g. **Linux servers**) and assign a template (e.g. **Linux by Zabbix agent active**).
+5. Save.
+
+The server will then collect metrics from the agent for this host (CPU, memory, disk, etc.).
 
 ---
 
@@ -164,11 +213,25 @@ It keeps recent data and forwards it to the server; long-term history lives in P
 
 ---
 
+### About the Zabbix server agent
+
+The stack includes a **Zabbix agent** container that monitors the **same host** that runs the Zabbix server. It uses:
+
+- **Image**: `zabbix/zabbix-agent:ubuntu-7.4-latest`
+- **Server**: it reports to `zabbix-server` on the internal Docker network.
+- **Host name in Zabbix**: set by `ZABBIX_AGENT_HOSTNAME` in `.env` (default: `Zabbix server`).
+
+The agent runs with `privileged: true` and `pid: host` so it can collect real host metrics (processes, etc.), not just the container view. Port **10050** is published so the server can do passive checks; the agent also uses active checks to the server.
+
+After you create a host in the UI with the same name as `ZABBIX_AGENT_HOSTNAME` and point its Zabbix agent interface at `zabbix-agent:10050`, the server will start monitoring this host.
+
+---
+
 ### About the AV-focused proxy
 
 The included proxy container:
 
-- Uses the image `ghcr.io/hyperscaleav/zabbix-proxy-sqlite3:latest`.
+- Uses the image `ghcr.io/hyperscaleav/zabbix-proxy-sqlite3:latest` (service name: `zabbix-proxy`).
 - Is a thin wrapper around the official Zabbix Proxy SQLite3 image.
 - Adds extra tools and scripts useful for AV system monitoring.
 
@@ -198,7 +261,7 @@ You can adjust proxy behaviour in `.env`:
 
   ```bash
   cd /opt/zabbix
-  ./start.sh
+  docker compose --profile full up -d
   ```
 
 The database and configuration are preserved between restarts as long as `./data/postgres` is not deleted.
