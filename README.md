@@ -74,6 +74,48 @@ You can bring up **everything** (server + web + DB + agent + proxy) or **only th
 
 ---
 
+### Edge profile: getting the agent (and proxy) working
+
+Use this when this host is a **remote site** and only runs the agent + proxy; the central Zabbix server is elsewhere.
+
+**1. On the edge host (the remote machine)**
+
+- Clone or copy this repo to the host (e.g. `/opt/zabbix`).
+- Edit `.env`:
+  - **`ZABBIX_SERVER_ADDRESS`** = hostname or IP of your **central Zabbix server** (as reachable from this host). Example: `zabbix.central.example.com` or `10.0.1.50`.
+  - **`ZABBIX_SERVER_PORT`** = central server trapper port (default `10051`).
+  - **`ZABBIX_AGENT_HOSTNAME`** = name this host will have in the Zabbix UI (e.g. `Remote site 1` or the machine hostname).
+  - **`ZABBIX_AGENT_ACTIVE_SERVER`** = who the agent connects to for active checks (config and sending results). **Set to `zabbix-proxy`** on the edge host so the agent gets its config from the local proxy. Otherwise the agent talks to the central server, gets "no active checks, host monitored by proxy", and active check configuration update fails.
+  - **`ZABBIX_AGENT_PASSIVESERVERS`** = hosts allowed to connect to the agent for passive checks (must include the proxy). Easiest for edge: set to the Docker bridge subnet, e.g. `172.18.0.0/24` (check `docker network inspect` if your subnet differs). Alternatively use a comma-separated list: `central-server,zabbix-proxy`. (If unset, default is `zabbix-server,zabbix-proxy`, which is wrong for edge.)
+  - **`ZABBIX_PROXY_HOSTNAME`** = name the proxy will have in the Zabbix UI (e.g. `av-proxy-remote1`).
+- Start only the agent and proxy:
+  ```bash
+  cd /opt/zabbix
+  docker compose --profile edge up -d
+  ```
+- The agent listens on the host on port **10050** (`ZABBIX_AGENT_PORT`). The central server (or proxy) must be able to reach this host on that port for passive checks.
+
+**2. On the central Zabbix server (in the UI)**
+
+- **Register the proxy** (if you use it for this host):
+  - Go to **Administration** → **Proxies** → **Create proxy**.
+  - **Proxy name**: same as `ZABBIX_PROXY_HOSTNAME` on the edge (e.g. `av-proxy-remote1`).
+  - **Mode**: Active (proxy connects to server). Save.
+
+- **Create the host for this edge machine**:
+  - Go to **Data collection** → **Hosts** → **Create host**.
+  - **Host name**: same as `ZABBIX_AGENT_HOSTNAME` on the edge (e.g. `Remote site 1`).
+  - **Interfaces** → Add **Zabbix agent**:
+    - **IP address / DNS**: `zabbix-agent` (Docker service name – the **proxy** will use this to reach the agent on the same host).
+    - **Connect to**: **DNS**.
+    - **Port**: `10050` (or whatever `ZABBIX_AGENT_PORT` is on the edge).
+  - **Monitored by proxy**: **select the proxy** you created for this edge (required so the proxy, not the server, does passive checks; the proxy resolves `zabbix-agent` on the local Docker network).
+  - Add to a group and assign a template (e.g. **Linux by Zabbix agent**). Save.
+
+The agent uses **active** checks to push to the proxy/server. The **proxy** uses **passive** checks by connecting to `zabbix-agent:10050` on the Docker network (no firewall change needed on the edge host for agent traffic).
+
+---
+
 ### 1. Install the Zabbix stack
 
 Run these commands **on the server** (via SSH, for example):

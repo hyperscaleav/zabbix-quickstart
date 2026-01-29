@@ -109,8 +109,11 @@ services:
     ports:
       - "${ZABBIX_AGENT_PORT}:10050"
     environment:
-      ZBX_SERVER_HOST: "${ZABBIX_SERVER_ADDRESS:-zabbix-server}"
+      # For active checks: full stack = zabbix-server. Edge = set ZABBIX_AGENT_ACTIVE_SERVER=zabbix-proxy so the agent gets config from the local proxy (host is "monitored by proxy").
+      ZBX_SERVER_HOST: "${ZABBIX_AGENT_ACTIVE_SERVER:-${ZABBIX_SERVER_ADDRESS:-zabbix-server}}"
       ZBX_SERVER_PORT: "${ZABBIX_SERVER_PORT:-10051}"
+      # Hosts allowed to connect for passive checks (Server in agent config). Full stack: default below. Edge: set in .env to e.g. 172.18.0.0/24 (Docker bridge subnet) or "server,zabbix-proxy".
+      ZBX_PASSIVESERVERS: "${ZABBIX_AGENT_PASSIVESERVERS:-zabbix-server,zabbix-proxy}"
       # Host name as it will appear in Zabbix UI (create a host with this name and link the agent)
       ZBX_HOSTNAME: "${ZABBIX_AGENT_HOSTNAME}"
     volumes:
